@@ -7,8 +7,8 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 st.set_page_config(page_title="PDF Statement Extractor", page_icon="💳", layout="wide")
 
-st.title("💳 ระบบดึงข้อมูลรายการใช้บัตรเครดิตลง Excel (Professional Edition)")
-st.write("ดึงคอลัมน์: **วันที่ใช้บัตร**, **วันที่บันทึกรายการ**, **รายการ**, และ **จำนวนเงิน** (รองรับยอดติดลบ/เครดิตคืนเงิน แยก Sheet ตาม **วันที่ครบกำหนดชำระ**)")
+st.title("💳 ระบบดึงข้อมูลรายการใช้บัตรเครดิตลง Excel (Multi-Page Supported)")
+st.write("ดึงคอลัมน์: **วันที่ใช้บัตร**, **วันที่บันทึกรายการ**, **รายการ**, และ **จำนวนเงิน** (อ่านต่อเนื่องทุกหน้าจนถึงบรรทัดสรุปยอด)")
 
 uploaded_files = st.file_uploader(
     "เลือกหรือลากไฟล์ PDF ใบแจ้งยอดมาวางที่นี่ (รองรับหลายไฟล์พร้อมกัน)", 
@@ -21,14 +21,19 @@ if uploaded_files:
     
     file_data_map = {}
     
-    with st.spinner("กำลังประมวลผลและจัดรูปแบบตารางอย่างสวยงาม..."):
+    with st.spinner("กำลังประมวลผลอ่านข้อมูลทุกหน้าและจัดรูปแบบตาราง..."):
         for uploaded_file in uploaded_files:
             recording = False
             extracted_records = []
             due_date = "Sheet_Data"
+            file_finished = False
             
             with pdfplumber.open(uploaded_file) as pdf:
-                for page in pdf.pages:
+                # วนลูปอ่านข้อมูลทุกหน้าใน PDF
+                for page_num, page in enumerate(pdf.pages, start=1):
+                    if file_finished:
+                        break
+                        
                     text = page.extract_text()
                     if not text:
                         continue
@@ -38,22 +43,23 @@ if uploaded_files:
                     for line in lines:
                         clean_line = line.strip()
                         
-                        # ค้นหาวันที่ครบกำหนดชำระ
+                        # 1. ค้นหาวันที่ครบกำหนดชำระ (หาจากหน้าแรกๆ ที่เจอ)
                         if ("ครบกำหนด" in clean_line or "Due Date" in clean_line) and due_date == "Sheet_Data":
                             date_match = re.search(r'(\d{2}[/.-]\d{2}[/.-]\d{2,4})', clean_line)
                             if date_match:
                                 raw_date = date_match.group(1).replace('/', '-').replace('.', '-')
                                 due_date = f"ครบชำระ_{raw_date}"
                         
-                        # เริ่มอ่านเมื่อพบข้อความ "วันที่ใช้บัตร"
+                        # 2. เริ่มเปิดสถานะอ่านรายการเมื่อพบข้อความ "วันที่ใช้บัตร"
                         if "วันที่ใช้บัตร" in clean_line:
                             recording = True
                             continue
                         
+                        # 3. เก็บบันทึกข้อมูลตาราง
                         if recording and clean_line:
                             parts = clean_line.split()
                             
-                            # เจอคำว่า "สรุปยอด" -> เก็บบรรทัดสรุปยอดแล้วจบการอ่าน
+                            # สรุปยอดงวดนี้ -> บันทึกบรรทัดสรุปยอด แล้วจบการอ่านไฟล์นี้
                             if "สรุปยอด" in clean_line:
                                 if len(parts) >= 2:
                                     summary_label = " ".join([p for p in parts if not p.replace(',', '').replace('.', '').replace('-', '').replace('CR', '').replace('CR.', '').isdigit()])
@@ -66,9 +72,10 @@ if uploaded_files:
                                         "จำนวนเงิน": summary_amount
                                     })
                                 recording = False
+                                file_finished = True
                                 break
                             
-                            # เก็บบรรทัดรายการปกติ
+                            # บันทึกรายการปกติ (เช็คโครงสร้างบรรทัดที่มีวันที่และจำนวนเงิน)
                             if len(parts) >= 4:
                                 txn_date = parts[0]
                                 post_date = parts[1]
@@ -99,7 +106,7 @@ if uploaded_files:
         tabs = st.tabs(list(file_data_map.keys()))
         for tab, (s_name, df_data) in zip(tabs, file_data_map.items()):
             with tab:
-                st.write(f"### 📑 รายการสำหรับแท็บ: **{s_name}**")
+                st.write(f"### 📑 รายการสำหรับแท็บ: **{s_name}** (รวม {len(df_data)} รายการ)")
                 st.dataframe(df_data, use_container_width=True)
         
         # สร้างไฟล์ Excel
@@ -107,13 +114,12 @@ if uploaded_files:
         
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             for s_name, df_data in file_data_map.items():
-                # เขียนข้อมูลลง Sheet เริ่มแถวที่ 5
                 df_data.to_excel(writer, index=False, sheet_name=s_name, startrow=4)
                 
                 worksheet = writer.sheets[s_name]
                 worksheet.views.sheetView[0].showGridLines = True
                 
-                # Title Block (พรีเมียม สไตล์ Modern Corporate)
+                # Title Block
                 worksheet.merge_cells("A1:D1")
                 title_cell = worksheet["A1"]
                 title_cell.value = "💳 รายงานสรุปรายการใช้บัตรเครดิต"
@@ -122,7 +128,7 @@ if uploaded_files:
                 
                 worksheet.merge_cells("A2:D2")
                 sub_cell = worksheet["A2"]
-                sub_cell.value = f"วันที่ครบกำหนดชำระ: {s_name.replace('ครบชำระ_', '')}  |  ดึงข้อมูลอัตโนมัติจาก PDF"
+                sub_cell.value = f"วันที่ครบกำหนดชำระ: {s_name.replace('ครบชำระ_', '')}  |  ดึงข้อมูลอัตโนมัติจาก PDF (รวมทุกหน้า)"
                 sub_cell.font = Font(name="Segoe UI", size=10, italic=True, color="4F709C")
                 sub_cell.alignment = Alignment(horizontal="left", vertical="center")
                 
