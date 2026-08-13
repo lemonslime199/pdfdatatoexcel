@@ -3,14 +3,14 @@ import pdfplumber
 import pandas as pd
 import io
 
-st.set_page_config(page_title="PDF to Excel Converter", page_icon="📑", layout="wide")
+st.set_page_config(page_title="PDF Statement Extractor", page_icon="💳", layout="wide")
 
-st.title("📑 ระบบแปลงข้อมูลตารางจาก PDF เป็น Excel")
-st.write("ระบบจะอ่านข้อมูลเฉพาะส่วน **'วันที่ใช้บัตร'** ไปจนถึง **'สรุปยอดงวดนี้'**")
+st.title("💳 ระบบดึงข้อมูลรายการใช้บัตรจาก PDF")
+st.write("ดึงเฉพาะคอลัมน์: **วันที่ใช้บัตร**, **วันที่บันทึกรายการ**, **รายการ**, และ **จำนวนเงิน**")
 
-# 1. ส่วนการอัปโหลดไฟล์ PDF
+# 1. อัปโหลดไฟล์ PDF
 uploaded_files = st.file_uploader(
-    "เลือกหรือลากไฟล์ PDF มาวางที่นี่ (รองรับหลายไฟล์พร้อมกัน)", 
+    "เลือกหรือลากไฟล์ PDF ใบแจ้งยอดมาวางที่นี่ (รองรับหลายไฟล์พร้อมกัน)", 
     type=["pdf"], 
     accept_multiple_files=True
 )
@@ -18,15 +18,14 @@ uploaded_files = st.file_uploader(
 if uploaded_files:
     st.write(f"📁 จำนวนไฟล์ที่อัปโหลด: **{len(uploaded_files)}** ไฟล์")
     
-    all_extracted_rows = []
+    extracted_records = []
     
-    with st.spinner("กำลังประมวลผลและค้นหาช่วงข้อมูล..."):
+    with st.spinner("กำลังประมวลผลและดึงข้อมูลรายการ..."):
         for uploaded_file in uploaded_files:
-            recording = False  # ตัวแปรสถานะบันทึกข้อมูล (เริ่มเปิดเมื่อเจอคำที่กำหนด)
+            recording = False
             
             with pdfplumber.open(uploaded_file) as pdf:
                 for page_num, page in enumerate(pdf.pages, start=1):
-                    # ดึงบรรทัดข้อความทั้งหมดในแต่ละหน้า
                     text = page.extract_text()
                     if not text:
                         continue
@@ -36,57 +35,56 @@ if uploaded_files:
                     for line in lines:
                         clean_line = line.strip()
                         
-                        # ตรวจสอบจุดเริ่มต้น: เจอคำว่า "วันที่ใช้บัตร"
+                        # เริ่มอ่านเมื่อพบข้อความ "วันที่ใช้บัตร"
                         if "วันที่ใช้บัตร" in clean_line:
                             recording = True
+                            continue  # ข้ามบรรทัดหัวข้อ
                         
-                        # ตรวจสอบจุดสิ้นสุด: เจอคำว่า "สรุปยอดงวดนี้"
+                        # หยุดอ่านเมื่อพบข้อความ "สรุปยอดงวดนี้"
                         if "สรุปยอดงวดนี้" in clean_line:
                             recording = False
-                            break  # หยุดอ่านไฟล์นี้ทันที
+                            break
                         
-                        # หากอยู่ในช่วงที่กำหนด ให้บันทึกบรรทัดข้อมูลไว้
                         if recording and clean_line:
-                            # แยกคอลัมน์ด้วยช่องว่าง หรือเว้นวรรคหลายช่อง
-                            row_data = clean_line.split()
+                            parts = clean_line.split()
                             
-                            # เพิ่มชื่อไฟล์และหน้าไว้เป็นอ้างอิง
-                            all_extracted_rows.append({
-                                "ชื่อไฟล์ PDF": uploaded_file.name,
-                                "หน้า PDF": page_num,
-                                "ข้อมูลบรรทัด": clean_line,
-                                "รายละเอียด": row_data
-                            })
+                            # ตรวจสอบว่าบรรทัดมีข้อมูลครบอย่างน้อย 4 ส่วน (วันที่ใช้, วันที่บันทึก, รายการ, จำนวนเงิน)
+                            if len(parts) >= 4:
+                                txn_date = parts[0]       # คอลัมน์ 1: วันที่ใช้บัตร
+                                post_date = parts[1]      # คอลัมน์ 2: วันที่บันทึกรายการ
+                                amount = parts[-1]        # คอลัมน์ 4: จำนวนเงิน (ตัวเลขท้ายสุด)
+                                description = " ".join(parts[2:-1]) # คอลัมน์ 3: ข้อความรายการกลางทั้งหมด
+                                
+                                extracted_records.append({
+                                    "วันที่ใช้บัตร": txn_date,
+                                    "วันที่บันทึกรายการ": post_date,
+                                    "รายการ": description,
+                                    "จำนวนเงิน": amount,
+                                    "ชื่อไฟล์": uploaded_file.name
+                                })
 
-    if all_extracted_rows:
-        st.success("✅ สกัดข้อมูลสำเร็จ!")
+    if extracted_records:
+        st.success("✅ ดึงข้อมูลสำเร็จ!")
         
-        # 2. จัดโครงสร้างข้อมูลให้อยู่ในรูปแบบ DataFrame
-        # แยกข้อมูลข้อความดั้งเดิมและคอลัมน์ย่อย
-        df_raw = pd.DataFrame(all_extracted_rows)
+        df = pd.DataFrame(extracted_records)
         
-        # ขยายรายการข้อมูลย่อยออกเป็นคอลัมน์แยก (Col_1, Col_2, ...)
-        details_df = pd.DataFrame(df_raw["รายละเอียด"].tolist())
-        details_df.columns = [f"Col_{i+1}" for i in range(details_df.shape[1])]
+        # แสดงผลตารางบนหน้าเว็บ
+        st.subheader("📊 ตารางรายการใช้บัตรเครดิต:")
+        st.dataframe(df[["วันที่ใช้บัตร", "วันที่บันทึกรายการ", "รายการ", "จำนวนเงิน", "ชื่อไฟล์"]], use_container_width=True)
         
-        # รวมข้อมูลอ้างอิงและคอลัมน์ย่อยเข้าด้วยกัน
-        final_df = pd.concat([df_raw[["ชื่อไฟล์ PDF", "หน้า PDF", "ข้อมูลบรรทัด"]], details_df], axis=1)
-        
-        # แสดงตัวอย่างตารางบนหน้าเว็บ
-        st.subheader("📊 ข้อมูลตารางที่ดึงได้:")
-        st.dataframe(final_df, use_container_width=True)
-        
-        # 3. นำข้อมูลลงตาราง Excel
+        # 2. นำเฉพาะ 4 คอลัมน์หลักลงไฟล์ Excel
         excel_buffer = io.BytesIO()
-        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            final_df.to_excel(writer, index=False, sheet_name='Extracted_Data')
+        export_df = df[["วันที่ใช้บัตร", "วันที่บันทึกรายการ", "รายการ", "จำนวนเงิน"]]
         
-        # ปุ่มสำหรับดาวน์โหลด
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            export_df.to_excel(writer, index=False, sheet_name='Credit_Card_Statement')
+        
+        # ปุ่มดาวน์โหลด
         st.download_button(
             label="📥 ดาวน์โหลดไฟล์ Excel (.xlsx)",
             data=excel_buffer.getvalue(),
-            file_name="statement_extracted_data.xlsx",
+            file_name="credit_card_statement.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
     else:
-        st.warning("⚠️ ไม่พบคำว่า 'วันที่ใช้บัตร' ในไฟล์ PDF ที่อัปโหลด กรุณาตรวจสอบเนื้อหาในไฟล์")
+        st.warning("⚠️ ไม่พบข้อมูลรายการใช้บัตรในช่วงที่กำหนด กรุณาตรวจสอบรูปแบบไฟล์ PDF")
