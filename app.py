@@ -6,9 +6,9 @@ import io
 st.set_page_config(page_title="PDF Statement Extractor", page_icon="💳", layout="wide")
 
 st.title("💳 ระบบดึงข้อมูลรายการใช้บัตรจาก PDF")
-st.write("ดึงเฉพาะคอลัมน์: **วันที่ใช้บัตร**, **วันที่บันทึกรายการ**, **รายการ**, และ **จำนวนเงิน**")
+st.write("ดึงเฉพาะคอลัมน์: **วันที่ใช้บัตร**, **วันที่บันทึกรายการ**, **รายการ**, และ **จำนวนเงิน** (รวมบรรทัดสรุปยอด)")
 
-# 1. อัปโหลดไฟล์ PDF
+# 1. ส่วนการอัปโหลดไฟล์ PDF
 uploaded_files = st.file_uploader(
     "เลือกหรือลากไฟล์ PDF ใบแจ้งยอดมาวางที่นี่ (รองรับหลายไฟล์พร้อมกัน)", 
     type=["pdf"], 
@@ -40,20 +40,32 @@ if uploaded_files:
                             recording = True
                             continue  # ข้ามบรรทัดหัวข้อ
                         
-                        # หยุดอ่านเมื่อพบข้อความ "สรุปยอดงวดนี้"
-                        if "สรุปยอดงวดนี้" in clean_line:
-                            recording = False
-                            break
-                        
                         if recording and clean_line:
                             parts = clean_line.split()
                             
-                            # ตรวจสอบว่าบรรทัดมีข้อมูลครบอย่างน้อย 4 ส่วน (วันที่ใช้, วันที่บันทึก, รายการ, จำนวนเงิน)
+                            # เช็กเมื่อเจอคำว่า "สรุปยอด" -> เก็บบรรทัดสรุปยอด แล้วค่อยจบการอ่าน
+                            if "สรุปยอด" in clean_line:
+                                if len(parts) >= 2:
+                                    summary_label = " ".join([p for p in parts if not p.replace(',', '').replace('.', '').replace('-', '').isdigit()])
+                                    summary_amount = parts[-1]
+                                    
+                                    extracted_records.append({
+                                        "วันที่ใช้บัตร": "-",
+                                        "วันที่บันทึกรายการ": "-",
+                                        "รายการ": summary_label if summary_label else "สรุปยอดงวดนี้",
+                                        "จำนวนเงิน": summary_amount,
+                                        "ชื่อไฟล์": uploaded_file.name
+                                    })
+                                
+                                recording = False
+                                break  # หยุดอ่านหลังจากเก็บบรรทัดสรุปยอดเรียบร้อยแล้ว
+                            
+                            # เก็บบรรทัดรายการปกติ
                             if len(parts) >= 4:
-                                txn_date = parts[0]       # คอลัมน์ 1: วันที่ใช้บัตร
-                                post_date = parts[1]      # คอลัมน์ 2: วันที่บันทึกรายการ
-                                amount = parts[-1]        # คอลัมน์ 4: จำนวนเงิน (ตัวเลขท้ายสุด)
-                                description = " ".join(parts[2:-1]) # คอลัมน์ 3: ข้อความรายการกลางทั้งหมด
+                                txn_date = parts[0]       # วันที่ใช้บัตร
+                                post_date = parts[1]      # วันที่บันทึกรายการ
+                                amount = parts[-1]        # จำนวนเงิน (ท้ายสุด)
+                                description = " ".join(parts[2:-1]) # รายการสินค้า/บริการ
                                 
                                 extracted_records.append({
                                     "วันที่ใช้บัตร": txn_date,
@@ -69,10 +81,10 @@ if uploaded_files:
         df = pd.DataFrame(extracted_records)
         
         # แสดงผลตารางบนหน้าเว็บ
-        st.subheader("📊 ตารางรายการใช้บัตรเครดิต:")
+        st.subheader("📊 ตารางรายการใช้บัตรเครดิต (จนถึงบรรทัดสรุปยอด):")
         st.dataframe(df[["วันที่ใช้บัตร", "วันที่บันทึกรายการ", "รายการ", "จำนวนเงิน", "ชื่อไฟล์"]], use_container_width=True)
         
-        # 2. นำเฉพาะ 4 คอลัมน์หลักลงไฟล์ Excel
+        # 2. นำข้อมูลลงไฟล์ Excel
         excel_buffer = io.BytesIO()
         export_df = df[["วันที่ใช้บัตร", "วันที่บันทึกรายการ", "รายการ", "จำนวนเงิน"]]
         
